@@ -79,6 +79,7 @@
     [binop (op lhs rhs) (op (calc lhs) (calc rhs))]
     [with(lob body)
          (if (duplicate-binding-names? lob) (error 'calc "Mulitple bindings for one identifier")
+             ; Each binding in the with statement must be substituted in the body
              (calc (foldl (lambda (binding expr)
                             (subst expr (binding-name binding)(binding-named-expr binding)))
                           body
