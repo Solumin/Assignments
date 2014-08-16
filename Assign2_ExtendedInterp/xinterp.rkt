@@ -31,10 +31,15 @@
     [(-) -]
     [(*) *]
     [(/) /]
-    [else (error 'parse "Unknown operation symbol")]
     )
   )
 
+;; valid-op? : symbol -> boolean
+; Checks if the given operation is known
+(define (valid-op? op)
+  (ormap (lambda (known-op)
+           (symbol=? known-op op))
+         (list '+ '- '* '/)))
 
 ;; create-bindings : (listof symbol) -> (listof Binding)
 ; Takes the parser's list of symbols in with expressions and creates a list of bindings
@@ -50,6 +55,22 @@
 (define (has-duplicates? items)
   (not (= (length (remove-duplicates items)) (length items))))
 
+;; valid-id? : symbol -> boolean
+(define (valid-id? id)
+  (not (ormap (lambda (reserved-id)
+                (symbol=? reserved-id id))
+              (list '+ '- '* '/ 'with 'if0 'fun)))
+  )
+
+;; lookup : symbol Env -> CFWAE
+(define (lookup name env)
+  (type-case Env env
+    [mtEnv () (error 'lookup "no binding for identifier: ~a" name )]
+    [anEnv (bound-name bound-value rest-env)
+           (if(symbol=? bound-name name)
+              bound-value
+              (lookup name rest-env))]))
+
 ;; parse : expression -> CFWAE
 ; This procedure parses an expression into a CFWAE
 ; The biggest problem right now (that I have with it, that is) is that it doesn't give
@@ -58,7 +79,8 @@
 (define (parse sexp)
   (match sexp
     [(? number?) (num sexp)]
-    [(? symbol?) (id sexp)]
+    [(? symbol?) (if (valid-id? sexp) (id sexp)
+                     (error 'parse "IDs may not be +, -, *, /, with, if0 or fun. (Received ~a)" sexp))]
     [(list 'with (list bindings ...) body)
      (with 
       (cond
@@ -74,13 +96,52 @@
         [(has-duplicates? args) (error 'parse "Duplicate arguments in function definition")]
         [else args])
       (parse body))]
-    [(list 'app f (list args ...)) (app (parse f) (parse args))]
-    [(list op a b) (binop (lookup-op op) (parse a) (parse b))]
-    [else (error 'parse "Unknown syntax expression")]
+    [(list (? symbol? op) a b) (binop (lookup-op op) (parse a) (parse b))]
+    [(list f args ..1) (app (parse f) (map parse args))]
+    [else (error 'parse "Unknown syntax expression: ~a" sexp)]
+    ))
+
+;; preproces : CFWAE -> CFWAE
+(define (preprocess expr)
+  (type-case CFWAE expr
+    [num (n) expr]
+    [binop (op l r) (binop op (preprocess l) (preprocess r))]
+    [with (lob body) (app 
+                      (fun (map binding-name lob) (preprocess body))
+                      (map binding-named-expr lob))]
+    [id (name) expr]
+    [if0 (c t e) (if0 (preprocess c) (preprocess t) (preprocess e))]
+    [fun (args body) (fun args (preprocess body))]
+    [app (f args) (app (preprocess f) args)]
     ))
 
 ;; interp : CFWAE -> CFWAE-Value
 ;; This procedure evaluates a CFWAE expression, producing a CFWAE-Value.
-;(define (interp expr)
-;  (...))
+(define (interp expr)
+  (interp-sub (preprocess expr) (mtEnv)))
 
+;; interp-no-with : CFWAE Env -> CFWAE-Value
+(define (interp-sub expr env)
+  (type-case CFWAE expr
+    [num (n) (numV n)]
+    [binop (op l r) (numV (op (numV-n (interp-sub l env)) (numV-n (interp-sub r env))))]
+    [with (lob body) (error 'interp "With statements should have been preprocessed.")]
+    [id (name) (error 'interp "Tried to access id ~a" name)]; (lookup name env)]
+    [if0 (c t e) 
+         (local ([define cond-val (interp-sub c env)])
+           (cond
+             [(closureV? cond-val)
+              (error 'interp "if0 conditions must evaluate to a number (given ~a)" cond-val)]
+             [(if (= 0 (numV-n (interp-sub c env)))
+                  (interp-sub t env)
+                  (interp-sub e env))]))]
+    [fun (ids body) (closureV ids body env)]
+    [app (fun args)
+         (local ([define fun-val (interp-sub fun env)])
+           (interp-sub (closureV-body fun-val)
+                           (foldl
+                            (lambda (fv arg new-env)
+                              (anEnv fv (interp-sub arg env) new-env))
+                            (mtEnv)
+                            (closureV-params fun-val) args)))]
+    ))
