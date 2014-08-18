@@ -126,7 +126,7 @@
     [num (n) (numV n)]
     [binop (op l r) (numV (op (numV-n (interp-sub l env)) (numV-n (interp-sub r env))))]
     [with (lob body) (error 'interp "With statements should have been preprocessed.")]
-    [id (name) (error 'interp "Tried to access id ~a" name)]; (lookup name env)]
+    [id (name) (lookup name env)]
     [if0 (c t e) 
          (local ([define cond-val (interp-sub c env)])
            (cond
